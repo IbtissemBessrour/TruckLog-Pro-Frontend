@@ -1,4 +1,5 @@
 import { Bell, Search } from 'lucide-react';
+import ThemeToggle from './ThemeToggle';
 
 const TopNav = ({ title }: { title: string }) => (
   <header className="h-16 border-b border-border bg-card/50 backdrop-blur-md flex items-center justify-between px-8 sticky top-0 z-40">
@@ -11,6 +12,7 @@ const TopNav = ({ title }: { title: string }) => (
           className="bg-transparent text-sm outline-none text-foreground placeholder:text-muted-foreground w-40"
         />
       </div>
+      <ThemeToggle />
       <button className="relative p-2 rounded-lg hover:bg-secondary/50 transition-colors">
         <Bell className="w-5 h-5 text-muted-foreground" />
         <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full" />
