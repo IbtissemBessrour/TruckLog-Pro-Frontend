@@ -72,7 +72,7 @@ const ELDGrid = ({ segments }: { segments: LogSegment[] }) => {
               y={y}
               width={24 * HOUR_WIDTH}
               height={ROW_HEIGHT}
-              fill={rowIdx % 2 === 0 ? 'hsla(222, 30%, 12%, 0.5)' : 'transparent'}
+              className={rowIdx % 2 === 0 ? 'fill-muted/50' : 'fill-transparent'}
             />
             {/* Label */}
             <text
@@ -91,7 +91,7 @@ const ELDGrid = ({ segments }: { segments: LogSegment[] }) => {
               y1={y + ROW_HEIGHT}
               x2={LEFT_MARGIN + 24 * HOUR_WIDTH}
               y2={y + ROW_HEIGHT}
-              stroke="hsl(222, 30%, 18%)"
+              className="stroke-border"
               strokeWidth="0.5"
             />
             {/* Total hours */}
@@ -116,7 +116,7 @@ const ELDGrid = ({ segments }: { segments: LogSegment[] }) => {
           y1={TOP_MARGIN}
           x2={LEFT_MARGIN + i * HOUR_WIDTH}
           y2={TOP_MARGIN + 4 * ROW_HEIGHT}
-          stroke="hsl(222, 30%, 18%)"
+          className="stroke-border"
           strokeWidth={i % 6 === 0 ? '1' : '0.3'}
         />
       ))}
@@ -132,7 +132,7 @@ const ELDGrid = ({ segments }: { segments: LogSegment[] }) => {
             y1={TOP_MARGIN}
             x2={x}
             y2={TOP_MARGIN + 4}
-            stroke="hsl(222, 30%, 20%)"
+            className="stroke-muted-foreground/30"
             strokeWidth="0.3"
           />
         );
@@ -142,7 +142,7 @@ const ELDGrid = ({ segments }: { segments: LogSegment[] }) => {
       <path
         d={pathParts.join(' ')}
         fill="none"
-        stroke="hsl(210, 100%, 56%)"
+        className="stroke-primary"
         strokeWidth="2.5"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -155,7 +155,7 @@ const ELDGrid = ({ segments }: { segments: LogSegment[] }) => {
         width={24 * HOUR_WIDTH}
         height={4 * ROW_HEIGHT}
         fill="none"
-        stroke="hsl(222, 30%, 20%)"
+        className="stroke-border"
         strokeWidth="1"
       />
 
