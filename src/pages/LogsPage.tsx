@@ -2,17 +2,44 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { FileText } from 'lucide-react';
 import TopNav from '@/components/layout/TopNav';
-import { mockTrips } from '@/services/mockData';
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+
+const API_URL = "http://127.0.0.1:8088/api/trips/";
 
 const LogsPage = () => {
   const navigate = useNavigate();
+  const [trips, setTrips] = useState<any[]>([]);
+
+  const token = localStorage.getItem("access");
+
+  useEffect(() => {
+    if (!token) return;
+
+    // 🔥 afficher le token dans F12
+    console.log("JWT Access Token:", token);
+
+    axios.get(API_URL, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    })
+    .then(res => {
+      setTrips(res.data);
+    })
+    .catch(err => {
+      console.error("Error fetching trips:", err);
+    });
+
+  }, [token]);
 
   return (
     <div>
       <TopNav title="Logs" />
       <div className="p-8">
         <div className="space-y-4">
-          {mockTrips.map((trip, i) => (
+
+          {trips.map((trip, i) => (
             <motion.div
               key={trip.id}
               initial={{ opacity: 0, y: 10 }}
@@ -26,13 +53,21 @@ const LogsPage = () => {
                   <FileText className="w-5 h-5 text-primary" />
                 </div>
                 <div>
-                  <p className="font-medium text-foreground">ELD Log — {trip.date}</p>
-                  <p className="text-sm text-muted-foreground">{trip.pickupLocation} → {trip.dropoffLocation}</p>
+                  <p className="font-medium text-foreground">
+                    ELD Log — {new Date(trip.created_at).toLocaleDateString()}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {trip.pickup_location} → {trip.dropoff_location}
+                  </p>
                 </div>
               </div>
-              <span className="text-sm text-muted-foreground">{trip.totalMiles} mi</span>
+
+              <span className="text-sm text-muted-foreground">
+                {trip.total_miles?.toFixed(0)} mi
+              </span>
             </motion.div>
           ))}
+
         </div>
       </div>
     </div>

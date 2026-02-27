@@ -1,377 +1,211 @@
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Download, FileText, Loader2 } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { Download, FileText, Loader2, AlertCircle, ShieldCheck } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+
 import { Button } from '@/components/ui/button';
 import TopNav from '@/components/layout/TopNav';
 import ELDGrid from '@/components/eld/ELDGrid';
-import { mockTrips, defaultLogSegments } from '@/services/mockData';
 import { LogSegment, DutyStatus, LogHeader } from '@/types/trip';
-import jsPDF from 'jspdf';
+import { generateELDVipPDF } from '@/services/logExportService';
 
-const STATUS_LABELS: Record<DutyStatus, string> = {
+// --- CONFIGURATION ---
+const STATUS_LABELS: Record<string, string> = {
   OFF: 'Off Duty',
   SLEEPER: 'Sleeper Berth',
   DRIVING: 'Driving',
-  ON: 'On Duty (Not Driving)',
+  ON: 'On Duty (Not Driving)'
 };
 
 const STATUS_ORDER: DutyStatus[] = ['OFF', 'SLEEPER', 'DRIVING', 'ON'];
 
+// --- COMPOSANT TOTALS ---
+const Totals = ({ totals }: { totals: Record<string, number> }) => (
+  <div className="p-6 border-t border-border bg-card/20">
+    <h4 className="text-[10px] font-black text-muted-foreground mb-4 uppercase tracking-[0.2em]">
+      24-Hour Period Summary 
+    </h4>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {STATUS_ORDER.map((status) => {
+        const value = totals[status] || 0;
+        return (
+          <div key={status} className="bg-secondary/30 rounded-lg p-4 border border-border/40 backdrop-blur-sm">
+            <p className="text-[10px] text-muted-foreground mb-1 font-bold uppercase tracking-tight">
+              {STATUS_LABELS[status]}
+            </p>
+            <p className="text-2xl font-bold text-foreground">
+              {value.toFixed(1)}
+              <span className="text-xs font-normal text-muted-foreground ml-1">hrs</span>
+            </p>
+            <div className="mt-2 h-1 w-full bg-muted/20 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-primary/50 transition-all duration-500" 
+                style={{ width: `${Math.min((value / 24) * 100, 100)}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+);
+
+// --- PAGE PRINCIPALE ---
 const LogSheetPage = () => {
   const { tripId } = useParams();
+  const navigate = useNavigate();
+  
   const [exporting, setExporting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  const trip = mockTrips.find(t => t.id === tripId);
-  const segments = trip?.logSegments || defaultLogSegments;
+  const [segments, setSegments] = useState<LogSegment[]>([]);
+  const [header, setHeader] = useState<LogHeader>({
+    driverName: '', date: '', truckId: '', carrier: '', from: '', to: '', totalMiles: 0, cycleUsed: 0,
+  });
 
-  const header: LogHeader = {
-    driverName: 'John E. Doe',
-    date: trip?.date || '2026-02-24',
-    truckId: '123',
-    carrier: "Doe's Transportation",
-    from: trip?.currentLocation || 'Washington, D.C.',
-    to: trip?.dropoffLocation || 'Newark, NJ',
-    totalMiles: trip?.totalMiles || 350,
-    cycleUsed: trip?.cycleUsed || 14,
-  };
+  const [backendTotals, setBackendTotals] = useState<Record<string, number>>({
+    OFF: 0, SLEEPER: 0, DRIVING: 0, ON: 0
+  });
 
-  const totals: Record<DutyStatus, number> = { OFF: 0, SLEEPER: 0, DRIVING: 0, ON: 0 };
-  segments.forEach(s => { totals[s.status] += s.end - s.start; });
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      const token = localStorage.getItem('token') || localStorage.getItem('access');
+      
+      if (!token) {
+        setError("Session expirée. Veuillez vous reconnecter.");
+        setLoading(false);
+        return;
+      }
+
+      const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+      try {
+        const [resUser, resTrip, resLogs] = await Promise.all([
+          fetch('http://127.0.0.1:8088/api/auth/profile/', { headers }),
+          fetch(`http://127.0.0.1:8088/api/trips/${tripId}/`, { headers }),
+          fetch(`http://127.0.0.1:8088/api/trips/${tripId}/logs/`, { headers })
+        ]);
+
+        if (resUser.status === 401) throw new Error("Non autorisé");
+
+        const userData = await resUser.json();
+        const tripData = await resTrip.json();
+        const logsData = await resLogs.json();
+
+        // CORRECTIF ICI : On prend le premier élément du tableau de logs
+        const currentLog = logsData[0] || {};
+
+        // 1. Mise à jour de l'en-tête
+        setHeader({
+          driverName: userData.username || '—',
+          date: currentLog.date || tripData.created_at?.split('T')[0] || '',
+          truckId: userData.truck_id || '—',
+          carrier: userData.carrier || '—',
+          from: tripData.pickup_location || '—',
+          to: tripData.dropoff_location || '—',
+          totalMiles: Math.round(tripData.total_miles || 0),
+          cycleUsed: parseFloat(tripData.cycle_used_input) || 0,
+        });
+
+        // 2. Segments pour la courbe ELD
+        setSegments(currentLog.segments || []);
+
+        // 3. Totaux du Backend (Mapping correct avec les noms de votre JSON)
+        setBackendTotals({
+          OFF: currentLog.total_off_duty || 0,
+          SLEEPER: currentLog.total_sleeper || 0,
+          DRIVING: currentLog.total_driving || 0,
+          ON: currentLog.total_on_duty || 0
+        });
+
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (tripId) fetchData();
+  }, [tripId]);
 
   const handleExportPDF = async () => {
     setExporting(true);
     try {
-      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-      const W = 297;
-      const H = 210;
-      const M = 15; // margin
-      const cW = W - 2 * M; // content width
-
-      // Colors
-      const BLACK: [number, number, number] = [0, 0, 0];
-      const GRAY: [number, number, number] = [120, 120, 120];
-      const LIGHT_GRAY: [number, number, number] = [200, 200, 200];
-
-      // Title
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(16);
-      pdf.setTextColor(...BLACK);
-      pdf.text("DRIVER'S DAILY LOG", W / 2, M + 5, { align: 'center' });
-
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(7);
-      pdf.setTextColor(...GRAY);
-      pdf.text('(24 Hours) — U.S. Department of Transportation — Federal Motor Carrier Safety Administration', W / 2, M + 10, { align: 'center' });
-      pdf.text('Original — File at home terminal. Duplicate — Driver retains in his/her possession for 8 days.', W / 2, M + 14, { align: 'center' });
-
-      // Header fields
-      const headerY = M + 20;
-      const fields = [
-        { label: 'Date', value: header.date },
-        { label: 'Driver Name', value: header.driverName },
-        { label: 'Truck/Tractor No.', value: header.truckId },
-        { label: 'Name of Carrier', value: header.carrier },
-        { label: 'From', value: header.from },
-        { label: 'To', value: header.to },
-        { label: 'Total Miles Driving Today', value: String(header.totalMiles) },
-        { label: 'Cycle Hours Used', value: `${header.cycleUsed}h` },
-      ];
-
-      const colW = cW / 4;
-      fields.forEach((f, i) => {
-        const col = i % 4;
-        const row = Math.floor(i / 4);
-        const x = M + col * colW;
-        const y = headerY + row * 12;
-
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(7);
-        pdf.setTextColor(...GRAY);
-        pdf.text(f.label, x + 2, y + 3);
-
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(9);
-        pdf.setTextColor(...BLACK);
-        pdf.text(f.value, x + 2, y + 8);
-
-        // Box
-        pdf.setDrawColor(...LIGHT_GRAY);
-        pdf.setLineWidth(0.3);
-        pdf.rect(x, y, colW, 11);
-      });
-
-      // 24-Hour Grid
-      const gridY = headerY + 30;
-      const gridH = 48; // 4 rows of 12mm
-      const rowH = gridH / 4;
-      const labelW = 35;
-      const totalColW = 18;
-      const chartW = cW - labelW - totalColW;
-      const hourW = chartW / 24;
-
-      // Grid border
-      pdf.setDrawColor(...BLACK);
-      pdf.setLineWidth(0.5);
-      pdf.rect(M + labelW, gridY, chartW, gridH);
-
-      // Hour labels
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(6);
-      pdf.setTextColor(...BLACK);
-      for (let i = 0; i <= 24; i++) {
-        const x = M + labelW + i * hourW;
-        const label = i === 0 ? 'Mid-\nnight' : i === 12 ? 'Noon' : i === 24 ? 'Mid-\nnight' : String(i);
-        if (i === 0 || i === 24) {
-          pdf.setFontSize(5);
-          pdf.text('Mid-', x, gridY - 5, { align: 'center' });
-          pdf.text('night', x, gridY - 2, { align: 'center' });
-          pdf.setFontSize(6);
-        } else {
-          pdf.text(String(label), x, gridY - 2, { align: 'center' });
-        }
-
-        // Vertical line
-        pdf.setDrawColor(i % 6 === 0 ? 0 : 180, i % 6 === 0 ? 0 : 180, i % 6 === 0 ? 0 : 180);
-        pdf.setLineWidth(i % 6 === 0 ? 0.4 : 0.15);
-        pdf.line(x, gridY, x, gridY + gridH);
-
-        // 15-min ticks
-        if (i < 24) {
-          for (let q = 1; q <= 3; q++) {
-            const qx = x + q * hourW / 4;
-            pdf.setDrawColor(210, 210, 210);
-            pdf.setLineWidth(0.1);
-            pdf.line(qx, gridY, qx, gridY + 2);
-          }
-        }
-      }
-
-      // Row labels and horizontal lines
-      const statusLabels = ['1. Off Duty', '2. Sleeper\n    Berth', '3. Driving', '4. On Duty\n    (Not Driving)'];
-      STATUS_ORDER.forEach((_, rowIdx) => {
-        const y = gridY + rowIdx * rowH;
-
-        // Horizontal line
-        pdf.setDrawColor(...BLACK);
-        pdf.setLineWidth(0.3);
-        pdf.line(M + labelW, y + rowH, M + labelW + chartW, y + rowH);
-
-        // Label
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(7);
-        pdf.setTextColor(...BLACK);
-        const label = statusLabels[rowIdx];
-        if (label.includes('\n')) {
-          const parts = label.split('\n');
-          pdf.text(parts[0], M + 2, y + rowH / 2);
-          pdf.text(parts[1].trim(), M + 2, y + rowH / 2 + 4);
-        } else {
-          pdf.text(label, M + 2, y + rowH / 2 + 2);
-        }
-
-        // Row fill alternating
-        if (rowIdx % 2 === 0) {
-          pdf.setFillColor(248, 248, 248);
-          pdf.rect(M + labelW, y, chartW, rowH, 'F');
-          // Redraw borders
-          pdf.setDrawColor(200, 200, 200);
-          pdf.setLineWidth(0.1);
-          pdf.rect(M + labelW, y, chartW, rowH);
-        }
-      });
-
-      // Draw duty status line on grid
-      pdf.setDrawColor(...BLACK);
-      pdf.setLineWidth(1.2);
-      segments.forEach((seg, i) => {
-        const x1 = M + labelW + seg.start * hourW;
-        const x2 = M + labelW + seg.end * hourW;
-        const rowIdx = STATUS_ORDER.indexOf(seg.status);
-        const y = gridY + rowIdx * rowH + rowH / 2;
-
-        // Vertical transition line
-        if (i > 0) {
-          const prevSeg = segments[i - 1];
-          const prevRowIdx = STATUS_ORDER.indexOf(prevSeg.status);
-          const prevY = gridY + prevRowIdx * rowH + rowH / 2;
-          pdf.line(x1, prevY, x1, y);
-        }
-        // Horizontal line
-        pdf.line(x1, y, x2, y);
-      });
-
-      // Total hours column
-      const totalX = M + labelW + chartW;
-      pdf.setDrawColor(...BLACK);
-      pdf.setLineWidth(0.5);
-      pdf.rect(totalX, gridY, totalColW, gridH);
-
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(7);
-      pdf.setTextColor(...BLACK);
-      pdf.text('Total', totalX + totalColW / 2, gridY - 5, { align: 'center' });
-      pdf.text('Hours', totalX + totalColW / 2, gridY - 2, { align: 'center' });
-
-      STATUS_ORDER.forEach((status, rowIdx) => {
-        const y = gridY + rowIdx * rowH + rowH / 2 + 2;
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(10);
-        const hrs = totals[status];
-        pdf.text(hrs.toFixed(hrs % 1 === 0 ? 0 : 1), totalX + totalColW / 2, y, { align: 'center' });
-
-        // Separator
-        if (rowIdx < 3) {
-          pdf.setDrawColor(...LIGHT_GRAY);
-          pdf.setLineWidth(0.2);
-          pdf.line(totalX, gridY + (rowIdx + 1) * rowH, totalX + totalColW, gridY + (rowIdx + 1) * rowH);
-        }
-      });
-
-      // Remarks section
-      const remarksY = gridY + gridH + 10;
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(9);
-      pdf.setTextColor(...BLACK);
-      pdf.text('Remarks:', M, remarksY);
-      pdf.setDrawColor(...LIGHT_GRAY);
-      pdf.setLineWidth(0.3);
-      for (let i = 0; i < 3; i++) {
-        pdf.line(M, remarksY + 5 + i * 6, M + cW, remarksY + 5 + i * 6);
-      }
-
-      // Recap section
-      const recapY = remarksY + 28;
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(8);
-      pdf.text('Recap:', M, recapY);
-
-      const recapLabels = [
-        ['70 Hour / 8 Day', `${header.cycleUsed}h`],
-        ['60 Hour / 7 Day', '-'],
-        ['Available', `${Math.max(0, 70 - header.cycleUsed)}h`],
-      ];
-      recapLabels.forEach(([label, value], i) => {
-        const x = M + 20 + i * 50;
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(7);
-        pdf.setTextColor(...GRAY);
-        pdf.text(label, x, recapY);
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(9);
-        pdf.setTextColor(...BLACK);
-        pdf.text(value, x, recapY + 5);
-      });
-
-      // Signature section
-      const sigY = H - M - 15;
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(7);
-      pdf.setTextColor(...GRAY);
-      pdf.text('Driver Signature:', M, sigY);
-      pdf.setDrawColor(...BLACK);
-      pdf.setLineWidth(0.4);
-      pdf.line(M + 30, sigY, M + 100, sigY);
-
-      pdf.text('Date:', M + 110, sigY);
-      pdf.text(header.date, M + 120, sigY);
-
-      pdf.text('Co-Driver:', M + 160, sigY);
-      pdf.line(M + 180, sigY, M + 240, sigY);
-
-      // Footer
-      pdf.setFontSize(6);
-      pdf.setTextColor(...GRAY);
-      pdf.text(`Generated by TruckLog Pro — ${new Date().toISOString().split('T')[0]}`, W / 2, H - 5, { align: 'center' });
-
-      pdf.save(`eld-log-${header.date}.pdf`);
+      await generateELDVipPDF(header, segments, backendTotals);
     } catch (err) {
       console.error(err);
+    } finally {
+      setExporting(false);
     }
-    setExporting(false);
   };
 
+  if (loading) return (
+    <div className="h-screen flex items-center justify-center">
+      <Loader2 className="animate-spin text-primary w-10 h-10" />
+    </div>
+  );
+
   return (
-    <div>
-      <TopNav title="ELD Log Sheet" />
-      <div className="p-8">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <FileText className="w-5 h-5 text-primary" />
-            Driver's Daily Log
-          </h2>
-          <Button
-            onClick={handleExportPDF}
-            disabled={exporting}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground"
-          >
-            {exporting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2" />}
-            Download Official ELD Log
+    <div className="min-h-screen bg-background text-foreground">
+      <TopNav title="Fiche Journalière" />
+      
+      <div className="p-4 md:p-8 max-w-7xl mx-auto">
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-primary/10 rounded-xl"><FileText className="text-primary" /></div>
+            <div>
+              <h2 className="text-2xl font-bold tracking-tight">Daily Log Sheet</h2>
+              <p className="text-xs text-muted-foreground font-mono">TRIP ID: #{tripId}</p>
+            </div>
+          </div>
+          <Button onClick={handleExportPDF} disabled={exporting}>
+            {exporting ? <Loader2 className="animate-spin mr-2 w-4 h-4" /> : <Download className="mr-2 w-4 h-4" />}
+            Exporter PDF
           </Button>
         </div>
 
-        <motion.div
-          ref={logRef}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card rounded-xl overflow-hidden"
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }} 
+          animate={{ opacity: 1, y: 0 }} 
+          className="glass-card rounded-2xl overflow-hidden border border-border shadow-2xl bg-card"
         >
           {/* Header */}
-          <div className="p-6 border-b border-border">
-            <div className="text-center mb-4">
-              <h3 className="text-lg font-bold text-foreground tracking-wide">DRIVER'S DAILY LOG</h3>
-              <p className="text-xs text-muted-foreground">U.S. DEPARTMENT OF TRANSPORTATION — ONE CALENDAR DAY — 24 HOURS</p>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <HeaderField label="Date" value={header.date} />
-              <HeaderField label="Driver Name" value={header.driverName} />
-              <HeaderField label="Truck ID" value={header.truckId} />
-              <HeaderField label="Carrier" value={header.carrier} />
-              <HeaderField label="From" value={header.from} />
-              <HeaderField label="To" value={header.to} />
-              <HeaderField label="Total Miles" value={String(header.totalMiles)} />
-              <HeaderField label="Cycle Used" value={`${header.cycleUsed}h`} />
+          <div className="p-8 border-b border-border bg-card/50">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+              <Field label="Driver" value={header.driverName} />
+              <Field label="Date" value={header.date} />
+              <Field label="Truck" value={header.truckId} />
+              <Field label="Carrier" value={header.carrier} />
+              <Field label="From" value={header.from} />
+              <Field label="To" value={header.to} />
+              <Field label="Miles" value={`${header.totalMiles} mi`} />
+              <Field label="Cycle" value={`${header.cycleUsed}h`} />
             </div>
           </div>
 
-          {/* 24-Hour Grid */}
-          <div className="p-6">
+          {/* LA COURBE (Grid) */}
+          <div className="p-8 bg-white/5 min-h-[350px]">
             <ELDGrid segments={segments} />
           </div>
 
-          {/* Totals */}
-          <div className="p-6 border-t border-border">
-            <h4 className="text-sm font-semibold text-muted-foreground mb-4 uppercase tracking-wider">Hours Summary</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {(Object.keys(totals) as DutyStatus[]).map(status => (
-                <div key={status} className="bg-secondary/50 rounded-lg p-4">
-                  <p className="text-xs text-muted-foreground mb-1">{STATUS_LABELS[status]}</p>
-                  <p className="text-2xl font-bold text-foreground">
-                    {totals[status].toFixed(totals[status] % 1 === 0 ? 0 : 1)}
-                    <span className="text-sm font-normal text-muted-foreground ml-1">hrs</span>
-                  </p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 bg-primary/10 border border-primary/20 rounded-lg p-4 text-center">
-              <p className="text-sm text-muted-foreground">Total</p>
-              <p className="text-3xl font-bold text-primary">
-                {Object.values(totals).reduce((a, b) => a + b, 0)}
-                <span className="text-sm font-normal text-muted-foreground ml-1">hours</span>
-              </p>
-            </div>
-          </div>
+          {/* LES TOTAUX DYNAMIQUES */}
+          <Totals totals={backendTotals} />
 
           {/* Signature */}
-          <div className="p-6 border-t border-border flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Driver Signature</p>
-              <div className="border-b border-muted-foreground/30 w-48 h-8" />
+          <div className="p-8 border-t border-border flex justify-between items-end bg-card/30">
+            <div className="space-y-2">
+              <p className="text-[10px] text-muted-foreground uppercase font-black">Certifié par le conducteur</p>
+              <div className="border-b-2 border-primary/20 w-72 h-12 flex items-center font-serif italic text-2xl text-primary/80 px-2">
+                {header.driverName}
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Date</p>
-              <p className="text-sm font-medium text-foreground">{header.date}</p>
+            <div className="text-right flex flex-col items-end">
+              <ShieldCheck className="text-emerald-500 w-6 h-6 mb-1" />
+              <p className="text-[10px] text-muted-foreground uppercase font-black">Date de validation</p>
+              <span className="font-mono text-sm font-bold">{header.date}</span>
             </div>
           </div>
         </motion.div>
@@ -380,10 +214,10 @@ const LogSheetPage = () => {
   );
 };
 
-const HeaderField = ({ label, value }: { label: string; value: string }) => (
-  <div>
-    <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">{label}</p>
-    <p className="text-sm font-semibold text-foreground">{value}</p>
+const Field = ({ label, value }: { label: string; value: string | number }) => (
+  <div className="flex flex-col gap-1">
+    <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest">{label}</p>
+    <p className="text-sm font-bold border-b border-border pb-1 truncate">{value || "—"}</p>
   </div>
 );
 
