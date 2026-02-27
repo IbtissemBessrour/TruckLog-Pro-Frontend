@@ -1,4 +1,5 @@
-#Frontend - TruckLog Pro Interface
+#TruckLog-Pro-Frontend
+Frontend - TruckLog Pro Interface
 L'interface utilisateur est une application React moderne, performante et entièrement responsive. Elle a été conçue pour offrir aux chauffeurs routiers une expérience fluide, similaire à un véritable boîtier ELD physique, avec une visualisation de données en temps réel.
 
 🛠 Technologies utilisées
